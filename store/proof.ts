@@ -1,76 +1,59 @@
-import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+"use client";
 
-import { canUseHint as checkHint, nextHintState } from "@/lib/hints";
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { ValidationResult } from "@/types";
+import { canUseHint, nextHintState } from "@/lib/hints";
 
 export type ValidationState = "idle" | "valid" | "invalid" | "validating";
 
-export type ProofState = {
+interface ProofState {
   currentProof: string[];
   hintsUsed: number;
   cooldownUntil: number | null;
   validationState: ValidationState;
-  addStep: (step: string) => void;
-  setStep: (index: number, step: string) => void;
+  result: ValidationResult | null;
+  addStep: (formula: string) => void;
+  setStep: (index: number, formula: string) => void;
   useHint: () => boolean;
   setValidationState: (state: ValidationState) => void;
+  setResult: (result: ValidationResult | null) => void;
   resetProof: () => void;
-  canUseHint: () => boolean;
-};
-
-const initialProofState = {
-  currentProof: [] as string[],
-  hintsUsed: 0,
-  cooldownUntil: null as number | null,
-  validationState: "idle" as ValidationState,
-};
+}
 
 export const useProofStore = create<ProofState>()(
   persist(
     (set, get) => ({
-      ...initialProofState,
-      addStep: (step) =>
-        set((state) => ({ currentProof: [...state.currentProof, step] })),
-      setStep: (index, step) =>
+      currentProof: [],
+      hintsUsed: 0,
+      cooldownUntil: null,
+      validationState: "idle",
+      result: null,
+      addStep: (formula) =>
+        set((state) => ({ currentProof: [...state.currentProof, formula] })),
+      setStep: (index, formula) =>
         set((state) => {
-          if (index < 0 || index >= state.currentProof.length) return state;
-
-          const currentProof = [...state.currentProof];
-          currentProof[index] = step;
-          return { currentProof };
+          const next = [...state.currentProof];
+          if (index >= 0 && index < next.length) next[index] = formula;
+          return { currentProof: next };
         }),
       useHint: () => {
         const { hintsUsed, cooldownUntil } = get();
-        if (!checkHint(hintsUsed, cooldownUntil)) return false;
-
-        const next = nextHintState(hintsUsed);
-        set({
-          hintsUsed: next.hintsUsed,
-          cooldownUntil: next.cooldownUntil,
-        });
+        if (!canUseHint(hintsUsed, cooldownUntil)) return false;
+        set(nextHintState(hintsUsed));
         return true;
       },
       setValidationState: (validationState) => set({ validationState }),
+      setResult: (result) => set({ result }),
       resetProof: () =>
         set({
           currentProof: [],
           hintsUsed: 0,
           cooldownUntil: null,
           validationState: "idle",
+          result: null,
         }),
-      canUseHint: () => {
-        const { hintsUsed, cooldownUntil } = get();
-        return checkHint(hintsUsed, cooldownUntil);
-      },
     }),
-    {
-      name: "hyperlean-proof",
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        currentProof: state.currentProof,
-        hintsUsed: state.hintsUsed,
-        cooldownUntil: state.cooldownUntil,
-      }),
-    }
-  )
+    { name: "hyperlean-proof" },
+  ),
 );

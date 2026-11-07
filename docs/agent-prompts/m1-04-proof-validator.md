@@ -29,13 +29,13 @@ Must be deterministic: identical inputs → identical output every time.
 - Named exports only
 
 ## Acceptance criteria
-- `npx tsc --noEmit` passes
+- `pnpm run typecheck` passes
 - Deterministic output verified (run same input 3×, same result)
 - Each rule correctly accepts valid steps and rejects invalid ones with a reason
 
 ## Verification
-Run: `npx tsc --noEmit`
-Run: `npm run lint`
+Run: `pnpm run typecheck`
+Run: `pnpm run lint`
 Optionally write a quick sanity check script (not committed)
 
 ## Done signal
