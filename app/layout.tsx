@@ -1,19 +1,18 @@
 import type { Metadata } from "next";
-import type { ReactElement, ReactNode } from "react";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Hyperlean",
-  description: "Gamified, keyboard-first formal theorem proving",
+  title: "Hyperlean — Prove theorems, level up",
+  description:
+    "A gamified, keyboard-first environment for formal mathematical theorem proving.",
 };
 
 export default function RootLayout({
   children,
-}: {
-  children: ReactNode;
-}): ReactElement {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className="dark">
-      <body style={{ margin: 0, background: "#0A0F1D", color: "#F8FAFC" }}>
+      <body className="min-h-screen bg-bg font-sans text-slate-200 antialiased">
         {children}
       </body>
     </html>
