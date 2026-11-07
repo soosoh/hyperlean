@@ -1,237 +1,252 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import type { KeyboardEvent, MouseEvent, ReactElement, WheelEvent } from "react";
-import type { Theorem, TheoremNode } from "@/types";
-import { buildDAG, getNodeStatus } from "@/lib/graph";
-import { Node } from "./Node";
+import { useCallback, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
+import { Maximize2, Minus, Plus } from "lucide-react";
+import type { Theorem } from "@/types";
+import { buildDAG, computeLevels, getNodeStatus } from "@/lib/graph";
 import { Edge } from "./Edge";
+import { NODE_HEIGHT, NODE_WIDTH, Node } from "./Node";
 
-const sampleTheorems: Theorem[] = [
-  {
-    id: "axiom-1",
-    title: "Law of Identity",
-    category: "propositional",
-    description: "A implies A",
-    difficulty: 1,
-    prerequisites: [],
-    axioms: ["identity"],
-    targetConclusion: "A → A",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-  {
-    id: "modus-ponens",
-    title: "Modus Ponens",
-    category: "propositional",
-    description: "From A → B and A, infer B",
-    difficulty: 2,
-    prerequisites: ["axiom-1"],
-    axioms: ["implication-elimination"],
-    targetConclusion: "B",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-  {
-    id: "hypothetical-syllogism",
-    title: "Hypothetical Syllogism",
-    category: "propositional",
-    description: "From A → B and B → C, infer A → C",
-    difficulty: 3,
-    prerequisites: ["modus-ponens"],
-    axioms: ["implication-introduction"],
-    targetConclusion: "A → C",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-  {
-    id: "de-morgans",
-    title: "De Morgan's Law",
-    category: "propositional",
-    description: "¬(A ∧ B) ≡ ¬A ∨ ¬B",
-    difficulty: 3,
-    prerequisites: ["modus-ponens"],
-    axioms: ["negation"],
-    targetConclusion: "¬(A ∧ B) → (¬A ∨ ¬B)",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-  {
-    id: "contraposition",
-    title: "Contraposition",
-    category: "propositional",
-    description: "A → B ≡ ¬B → ¬A",
-    difficulty: 3,
-    prerequisites: ["hypothetical-syllogism"],
-    axioms: ["negation", "implication"],
-    targetConclusion: "(A → B) → (¬B → ¬A)",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-  {
-    id: "disjunction-intro",
-    title: "Disjunction Introduction",
-    category: "propositional",
-    description: "From A, infer A ∨ B",
-    difficulty: 2,
-    prerequisites: ["axiom-1"],
-    axioms: ["disjunction"],
-    targetConclusion: "A → (A ∨ B)",
-    stats: { solveCount: 0, avgTimeSeconds: 0 },
-  },
-];
+const COLUMN_GAP = 110;
+const ROW_GAP = 48;
+const PADDING = 60;
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 1.8;
 
-type SkillTreeProps = {
-  theorems?: Theorem[];
-  solvedIds?: string[];
-  onInspect?: (theoremId: string) => void;
-};
+interface SkillTreeProps {
+  theorems: Theorem[];
+  solvedIds: string[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}
+
+function clampScale(value: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(value.toFixed(2))));
+}
 
 export function SkillTree({
-  theorems: providedTheorems = sampleTheorems,
-  solvedIds: providedSolvedIds = [],
-  onInspect,
-}: SkillTreeProps): ReactElement {
-  const solvedIds = useMemo(() => new Set(providedSolvedIds), [providedSolvedIds]);
-  const [focusIndex, setFocusIndex] = useState(0);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  theorems,
+  solvedIds,
+  selectedId,
+  onSelect,
+}: SkillTreeProps) {
+  const ordered = useMemo(() => {
+    try {
+      return buildDAG(theorems).topoOrder;
+    } catch {
+      return theorems.map((theorem) => theorem.id);
+    }
+  }, [theorems]);
 
-  const { topoOrder } = useMemo(() => buildDAG(providedTheorems), [providedTheorems]);
+  const positions = useMemo(() => {
+    const levels = computeLevels(theorems);
+    const byLevel = new Map<number, string[]>();
 
-  const nodes: TheoremNode[] = useMemo(
-    () =>
-      topoOrder.map((id) => {
-        const theorem = providedTheorems.find((t) => t.id === id)!;
-        return { ...theorem, status: getNodeStatus(theorem, solvedIds) };
-      }),
-    [providedTheorems, topoOrder, solvedIds]
-  );
+    for (const id of ordered) {
+      const level = levels.get(id) ?? 0;
+      const bucket = byLevel.get(level) ?? [];
+      bucket.push(id);
+      byLevel.set(level, bucket);
+    }
 
-  const nodeCount = nodes.length;
-  const nodeRadius = 24;
-  const nodeSpacing = 140;
-
-  const getNodePosition = (index: number): { x: number; y: number } => ({
-    x: (index % 3) * nodeSpacing,
-    y: Math.floor(index / 3) * nodeSpacing,
-  });
-
-  const inspect = useCallback(
-    (id: string): void => {
-      onInspect?.(id);
-      console.log(`Inspecting theorem: ${id}`);
-      const idx = nodes.findIndex((n) => n.id === id);
-      if (idx !== -1) setFocusIndex(idx);
-    },
-    [nodes, onInspect]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>): void => {
-      if (e.key === "ArrowDown" || e.key === "j") {
-        e.preventDefault();
-        setFocusIndex((i) => (i + 1) % nodeCount);
-      } else if (e.key === "ArrowUp" || e.key === "k") {
-        e.preventDefault();
-        setFocusIndex((i) => (i - 1 + nodeCount) % nodeCount);
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setFocusIndex((i) => (i + 1) % nodeCount);
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setFocusIndex((i) => (i - 1 + nodeCount) % nodeCount);
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        const id = nodes[focusIndex]?.id;
-        if (id) inspect(id);
-      }
-    },
-    [focusIndex, nodeCount, nodes, inspect]
-  );
-
-  const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>): void => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom((z) => Math.min(Math.max(z * delta, 0.5), 2));
-  }, []);
-
-  const handleMouseDown = useCallback(
-    (e: MouseEvent<HTMLDivElement>): void => {
-      const start = { x: e.clientX, y: e.clientY };
-      const startPan = { ...pan };
-
-      const handleMouseMove = (ev: globalThis.MouseEvent): void => {
-        setPan({
-          x: startPan.x + (ev.clientX - start.x),
-          y: startPan.y + (ev.clientY - start.y),
+    const result = new Map<string, { x: number; y: number }>();
+    for (const [level, ids] of byLevel) {
+      ids.forEach((id, index) => {
+        result.set(id, {
+          x: PADDING + level * (NODE_WIDTH + COLUMN_GAP),
+          y: PADDING + index * (NODE_HEIGHT + ROW_GAP),
         });
-      };
+      });
+    }
+    return result;
+  }, [theorems, ordered]);
 
-      const handleMouseUp = (): void => {
-        window.removeEventListener("mousemove", handleMouseMove);
-        window.removeEventListener("mouseup", handleMouseUp);
-      };
+  const dimensions = useMemo(() => {
+    let maxX = 0;
+    let maxY = 0;
+    for (const position of positions.values()) {
+      maxX = Math.max(maxX, position.x + NODE_WIDTH);
+      maxY = Math.max(maxY, position.y + NODE_HEIGHT);
+    }
+    return {
+      width: maxX + PADDING,
+      height: Math.max(maxY + PADDING, 420),
+    };
+  }, [positions]);
 
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
-    },
-    [pan]
+  const solved = useMemo(() => new Set(solvedIds), [solvedIds]);
+
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [focusedId, setFocusedId] = useState<string | null>(ordered[0] ?? null);
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
+    null,
   );
+
+  const moveFocus = useCallback(
+    (direction: 1 | -1) => {
+      if (ordered.length === 0) return;
+      const current = focusedId ? ordered.indexOf(focusedId) : -1;
+      const nextIndex = Math.min(
+        Math.max(current + direction, 0),
+        ordered.length - 1,
+      );
+      setFocusedId(ordered[nextIndex]);
+    },
+    [focusedId, ordered],
+  );
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const { key } = event;
+    if (key === "j" || key === "J" || key === "ArrowDown" || key === "ArrowRight") {
+      event.preventDefault();
+      moveFocus(1);
+      return;
+    }
+    if (key === "k" || key === "K" || key === "ArrowUp" || key === "ArrowLeft") {
+      event.preventDefault();
+      moveFocus(-1);
+      return;
+    }
+    if (key === "Enter" && focusedId) {
+      event.preventDefault();
+      onSelect(focusedId);
+      return;
+    }
+    if (key === "+" || key === "=") {
+      setScale((value) => clampScale(value + 0.1));
+      return;
+    }
+    if (key === "-" || key === "_") {
+      setScale((value) => clampScale(value - 0.1));
+    }
+  };
 
   return (
-    <div
-      role="region"
-      aria-label="Skill tree"
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      style={{ backgroundColor: "#0A0F1D", minHeight: "100vh" }}
-      className="outline-none focus-visible:ring-2 focus-visible:ring-[#3B82F6]"
-    >
+    <div className="rounded-2xl border border-slate-800 bg-card/60">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-200">Skill Tree</h2>
+          <p className="text-xs text-slate-500">
+            J / K or arrows to move · Enter to inspect · + / − to zoom
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setScale((value) => clampScale(value - 0.1))}
+            aria-label="Zoom out"
+            className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:bg-slate-800"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setScale(1);
+              setOffset({ x: 0, y: 0 });
+            }}
+            aria-label="Reset view"
+            className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:bg-slate-800"
+          >
+            <Maximize2 size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setScale((value) => clampScale(value + 0.1))}
+            aria-label="Zoom in"
+            className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:bg-slate-800"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+
       <div
-        style={{
-          width: "100vw",
-          height: "100vh",
-          overflow: "hidden",
-          position: "relative",
+        role="application"
+        aria-label="Theorem skill tree"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onWheel={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button")) return;
+          setScale((value) => clampScale(value - event.deltaY * 0.001));
         }}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
+        onPointerDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button") || target.closest("g[role='button']")) {
+            return;
+          }
+          drag.current = {
+            x: event.clientX,
+            y: event.clientY,
+            ox: offset.x,
+            oy: offset.y,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!drag.current) return;
+          setOffset({
+            x: drag.current.ox + (event.clientX - drag.current.x),
+            y: drag.current.oy + (event.clientY - drag.current.y),
+          });
+        }}
+        onPointerUp={() => {
+          drag.current = null;
+        }}
+        onPointerLeave={() => {
+          drag.current = null;
+        }}
+        className="h-[520px] w-full cursor-grab touch-none overflow-hidden rounded-b-2xl bg-bg outline-none focus-visible:ring-2 focus-visible:ring-primary active:cursor-grabbing"
       >
         <svg
           width="100%"
           height="100%"
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "0 0",
-            overflow: "visible",
-          }}
+          viewBox={`0 0 ${dimensions.width} ${dimensions.height}`}
+          role="img"
+          aria-label="Skill tree nodes and prerequisite edges"
         >
-          {topoOrder.flatMap((id, i) => {
-            const theorem = providedTheorems.find((t) => t.id === id)!;
-            const [x1, y1] = [
-              (i % 3) * nodeSpacing + nodeRadius,
-              Math.floor(i / 3) * nodeSpacing + nodeRadius,
-            ];
-            return theorem.prerequisites.flatMap((prereq) => {
-              const pIndex = topoOrder.indexOf(prereq);
-              if (pIndex === -1) return [];
-              const [x2, y2] = [
-                (pIndex % 3) * nodeSpacing + nodeRadius,
-                Math.floor(pIndex / 3) * nodeSpacing + nodeRadius,
-              ];
-              return <Edge key={`${prereq}-${id}`} x1={x2} y1={y2} x2={x1} y2={y1} />;
-            });
-          })}
-
-          {nodes.map((node, i) => {
-            const { x, y } = getNodePosition(i);
-            return (
-              <g key={node.id} transform={`translate(${x + 60}, ${y + 60})`}>
+          <g transform={`translate(${offset.x}, ${offset.y}) scale(${scale})`}>
+            {theorems.map((theorem) => {
+              const to = positions.get(theorem.id);
+              if (!to) return null;
+              return theorem.prerequisites.map((prerequisiteId) => {
+                const from = positions.get(prerequisiteId);
+                if (!from) return null;
+                return (
+                  <Edge
+                    key={`${prerequisiteId}->${theorem.id}`}
+                    x1={from.x + NODE_WIDTH}
+                    y1={from.y + NODE_HEIGHT / 2}
+                    x2={to.x}
+                    y2={to.y + NODE_HEIGHT / 2}
+                    active={solved.has(prerequisiteId)}
+                  />
+                );
+              });
+            })}
+            {theorems.map((theorem) => {
+              const position = positions.get(theorem.id);
+              if (!position) return null;
+              return (
                 <Node
-                  theorem={node}
-                  status={node.status}
-                  focused={i === focusIndex}
-                  onSelect={inspect}
+                  key={theorem.id}
+                  theorem={theorem}
+                  status={getNodeStatus(theorem, solved)}
+                  x={position.x}
+                  y={position.y}
+                  focused={focusedId === theorem.id}
+                  selected={selectedId === theorem.id}
+                  onSelect={(id) => {
+                    setFocusedId(id);
+                    onSelect(id);
+                  }}
                 />
-              </g>
-            );
-          })}
+              );
+            })}
+          </g>
         </svg>
       </div>
     </div>

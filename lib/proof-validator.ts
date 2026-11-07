@@ -1,21 +1,14 @@
 import type { Axiom, ProofStep, ValidationResult } from "@/types";
 
-/**
- * Propositional formula AST.
- *
- * This is intentionally minimal: it covers the connectives needed for
- * Modus Ponens, uniform substitution and axiom-schema matching. The parser
- * is pure and deterministic (no Date / Math.random / IO).
- */
-export type Formula =
-  | { readonly kind: "atom"; readonly name: string }
-  | { readonly kind: "not"; readonly body: Formula }
-  | { readonly kind: "and"; readonly left: Formula; readonly right: Formula }
-  | { readonly kind: "or"; readonly left: Formula; readonly right: Formula }
-  | { readonly kind: "implies"; readonly left: Formula; readonly right: Formula }
-  | { readonly kind: "iff"; readonly left: Formula; readonly right: Formula };
+type BinOp = "and" | "or" | "implies" | "iff";
 
-type TokenKind =
+export type Formula =
+  | { kind: "var"; name: string }
+  | { kind: "const"; value: boolean }
+  | { kind: "not"; inner: Formula }
+  | { kind: "bin"; op: BinOp; left: Formula; right: Formula };
+
+type TokenType =
   | "atom"
   | "not"
   | "and"
@@ -24,420 +17,386 @@ type TokenKind =
   | "iff"
   | "lparen"
   | "rparen"
-  | "eof";
+  | "true"
+  | "false";
 
 interface Token {
-  kind: TokenKind;
-  value: string;
-  pos: number;
+  type: TokenType;
+  value?: string;
 }
 
-class FormulaSyntaxError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "FormulaSyntaxError";
-  }
-}
-
-const MULTI_CHAR_TOKENS: ReadonlyArray<{ text: string; kind: TokenKind }> = [
-  { text: "<=>", kind: "iff" },
-  { text: "<->", kind: "iff" },
-  { text: "->", kind: "implies" },
-  { text: "=>", kind: "implies" },
-  { text: "/\\", kind: "and" },
-  { text: "\\/", kind: "or" },
-];
-
-const SINGLE_CHAR_TOKENS: Readonly<Record<string, TokenKind>> = {
-  "↔": "iff",
-  "→": "implies",
-  "∧": "and",
-  "∨": "or",
-  "¬": "not",
-  "&": "and",
-  "|": "or",
-  "~": "not",
-  "!": "not",
-  "(": "lparen",
-  ")": "rparen",
+const BIN_SYMBOL: Record<BinOp, string> = {
+  and: "∧",
+  or: "∨",
+  implies: "→",
+  iff: "↔",
 };
-
-const IDENT_START = /[\p{L}_]/u;
-const IDENT_PART = /[\p{L}\p{N}_']/u;
-const WHITESPACE = /\s/u;
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
+  const s = input;
   let i = 0;
 
-  while (i < input.length) {
-    const ch = input[i];
+  while (i < s.length) {
+    const ch = s[i];
 
-    if (WHITESPACE.test(ch)) {
+    if (/\s/.test(ch)) {
       i += 1;
       continue;
     }
 
-    let matchedMulti = false;
-    for (const token of MULTI_CHAR_TOKENS) {
-      if (input.startsWith(token.text, i)) {
-        tokens.push({ kind: token.kind, value: token.text, pos: i });
-        i += token.text.length;
-        matchedMulti = true;
-        break;
-      }
-    }
-    if (matchedMulti) continue;
+    const rest = s.slice(i);
 
-    const single = SINGLE_CHAR_TOKENS[ch];
-    if (single) {
-      tokens.push({ kind: single, value: ch, pos: i });
+    if (rest.startsWith("<->") || rest.startsWith("<=>")) {
+      tokens.push({ type: "iff" });
+      i += 3;
+      continue;
+    }
+    if (ch === "↔") {
+      tokens.push({ type: "iff" });
       i += 1;
       continue;
     }
-
-    if (IDENT_START.test(ch)) {
-      let end = i + 1;
-      while (end < input.length && IDENT_PART.test(input[end])) {
-        end += 1;
-      }
-      tokens.push({ kind: "atom", value: input.slice(i, end), pos: i });
-      i = end;
+    if (rest.startsWith("->") || rest.startsWith("=>")) {
+      tokens.push({ type: "implies" });
+      i += 2;
+      continue;
+    }
+    if (ch === "→") {
+      tokens.push({ type: "implies" });
+      i += 1;
+      continue;
+    }
+    if (rest.startsWith("/\\") || rest.startsWith("&&")) {
+      tokens.push({ type: "and" });
+      i += 2;
+      continue;
+    }
+    if (ch === "∧" || ch === "&") {
+      tokens.push({ type: "and" });
+      i += 1;
+      continue;
+    }
+    if (rest.startsWith("\\/") || rest.startsWith("||")) {
+      tokens.push({ type: "or" });
+      i += 2;
+      continue;
+    }
+    if (ch === "∨" || ch === "|") {
+      tokens.push({ type: "or" });
+      i += 1;
+      continue;
+    }
+    if (ch === "¬" || ch === "~" || ch === "!") {
+      tokens.push({ type: "not" });
+      i += 1;
+      continue;
+    }
+    if (ch === "(") {
+      tokens.push({ type: "lparen" });
+      i += 1;
+      continue;
+    }
+    if (ch === ")") {
+      tokens.push({ type: "rparen" });
+      i += 1;
+      continue;
+    }
+    if (ch === "⊤") {
+      tokens.push({ type: "true" });
+      i += 1;
+      continue;
+    }
+    if (ch === "⊥") {
+      tokens.push({ type: "false" });
+      i += 1;
+      continue;
+    }
+    if (/[A-Za-z]/.test(ch)) {
+      let j = i + 1;
+      while (j < s.length && /[A-Za-z0-9_]/.test(s[j])) j += 1;
+      tokens.push({ type: "atom", value: s.slice(i, j) });
+      i = j;
       continue;
     }
 
-    throw new FormulaSyntaxError(`Unexpected character "${ch}" at position ${i}`);
+    throw new Error(`Unexpected character '${ch}'`);
   }
 
-  tokens.push({ kind: "eof", value: "", pos: input.length });
   return tokens;
 }
 
-class Parser {
-  private index = 0;
-  private readonly tokens: Token[];
-
-  constructor(tokens: Token[]) {
-    this.tokens = tokens;
-  }
-
-  parse(): Formula {
-    const formula = this.parseIff();
-    if (this.peek().kind !== "eof") {
-      throw new FormulaSyntaxError(
-        `Unexpected token "${this.peek().value}" at position ${this.peek().pos}`,
-      );
-    }
-    return formula;
-  }
-
-  private peek(): Token {
-    return this.tokens[this.index];
-  }
-
-  private next(): Token {
-    const token = this.tokens[this.index];
-    this.index += 1;
-    return token;
-  }
-
-  private match(kind: TokenKind): boolean {
-    if (this.peek().kind === kind) {
-      this.index += 1;
-      return true;
-    }
-    return false;
-  }
-
-  private expect(kind: TokenKind): Token {
-    const token = this.peek();
-    if (token.kind !== kind) {
-      throw new FormulaSyntaxError(
-        `Expected ${kind} but found "${token.value}" at position ${token.pos}`,
-      );
-    }
-    return this.next();
-  }
-
-  // iff: lowest precedence, left-associative
-  private parseIff(): Formula {
-    let left = this.parseImplies();
-    while (this.match("iff")) {
-      const right = this.parseImplies();
-      left = { kind: "iff", left, right };
-    }
-    return left;
-  }
-
-  // implication: right-associative
-  private parseImplies(): Formula {
-    const left = this.parseOr();
-    if (this.match("implies")) {
-      const right = this.parseImplies();
-      return { kind: "implies", left, right };
-    }
-    return left;
-  }
-
-  private parseOr(): Formula {
-    let left = this.parseAnd();
-    while (this.match("or")) {
-      const right = this.parseAnd();
-      left = { kind: "or", left, right };
-    }
-    return left;
-  }
-
-  private parseAnd(): Formula {
-    let left = this.parseUnary();
-    while (this.match("and")) {
-      const right = this.parseUnary();
-      left = { kind: "and", left, right };
-    }
-    return left;
-  }
-
-  private parseUnary(): Formula {
-    if (this.match("not")) {
-      const body = this.parseUnary();
-      return { kind: "not", body };
-    }
-    return this.parsePrimary();
-  }
-
-  private parsePrimary(): Formula {
-    if (this.match("lparen")) {
-      const formula = this.parseIff();
-      this.expect("rparen");
-      return formula;
-    }
-
-    const token = this.peek();
-    if (token.kind === "atom") {
-      this.index += 1;
-      return { kind: "atom", name: token.value };
-    }
-
-    throw new FormulaSyntaxError(
-      `Expected a formula but found "${token.value}" at position ${token.pos}`,
-    );
-  }
-}
-
-/** Parse a propositional formula string into an AST. Throws on invalid input. */
 export function parseFormula(input: string): Formula {
-  return new Parser(tokenize(input)).parse();
+  const tokens = tokenize(input.trim());
+  let pos = 0;
+
+  const peek = (): Token | undefined => tokens[pos];
+  const next = (): Token | undefined => tokens[pos++];
+
+  const parseIff = (): Formula => {
+    let left = parseImplies();
+    while (peek()?.type === "iff") {
+      next();
+      const right = parseImplies();
+      left = { kind: "bin", op: "iff", left, right };
+    }
+    return left;
+  };
+
+  const parseImplies = (): Formula => {
+    const left = parseOr();
+    if (peek()?.type === "implies") {
+      next();
+      const right = parseImplies();
+      return { kind: "bin", op: "implies", left, right };
+    }
+    return left;
+  };
+
+  const parseOr = (): Formula => {
+    let left = parseAnd();
+    while (peek()?.type === "or") {
+      next();
+      const right = parseAnd();
+      left = { kind: "bin", op: "or", left, right };
+    }
+    return left;
+  };
+
+  const parseAnd = (): Formula => {
+    let left = parseNot();
+    while (peek()?.type === "and") {
+      next();
+      const right = parseNot();
+      left = { kind: "bin", op: "and", left, right };
+    }
+    return left;
+  };
+
+  const parseNot = (): Formula => {
+    if (peek()?.type === "not") {
+      next();
+      return { kind: "not", inner: parseNot() };
+    }
+    return parseAtom();
+  };
+
+  const parseAtom = (): Formula => {
+    const token = peek();
+    if (!token) throw new Error("Unexpected end of formula");
+
+    if (token.type === "atom") {
+      next();
+      const name = token.value as string;
+      if (name.toLowerCase() === "true") return { kind: "const", value: true };
+      if (name.toLowerCase() === "false") return { kind: "const", value: false };
+      return { kind: "var", name };
+    }
+    if (token.type === "true") {
+      next();
+      return { kind: "const", value: true };
+    }
+    if (token.type === "false") {
+      next();
+      return { kind: "const", value: false };
+    }
+    if (token.type === "lparen") {
+      next();
+      const inner = parseIff();
+      const closing = next();
+      if (!closing || closing.type !== "rparen") {
+        throw new Error("Expected ')'");
+      }
+      return inner;
+    }
+
+    throw new Error("Unexpected token in formula");
+  };
+
+  const formula = parseIff();
+  if (pos !== tokens.length) {
+    throw new Error("Unexpected trailing tokens in formula");
+  }
+  return formula;
 }
 
-/** Render a formula back to a canonical, fully parenthesised string. */
-export function formatFormula(formula: Formula): string {
+export function formulaToString(formula: Formula): string {
   switch (formula.kind) {
-    case "atom":
+    case "var":
       return formula.name;
-    case "not": {
-      const body = formatFormula(formula.body);
-      return formula.body.kind === "atom" ? `¬${body}` : `¬(${body})`;
-    }
-    case "and":
-      return `(${formatFormula(formula.left)} ∧ ${formatFormula(formula.right)})`;
-    case "or":
-      return `(${formatFormula(formula.left)} ∨ ${formatFormula(formula.right)})`;
-    case "implies":
-      return `(${formatFormula(formula.left)} → ${formatFormula(formula.right)})`;
-    case "iff":
-      return `(${formatFormula(formula.left)} ↔ ${formatFormula(formula.right)})`;
+    case "const":
+      return formula.value ? "⊤" : "⊥";
+    case "not":
+      return `¬${formulaToString(formula.inner)}`;
+    case "bin":
+      return `(${formulaToString(formula.left)} ${BIN_SYMBOL[formula.op]} ${formulaToString(
+        formula.right,
+      )})`;
   }
 }
 
-function formulaEquals(a: Formula, b: Formula): boolean {
-  switch (a.kind) {
-    case "atom":
-      return b.kind === "atom" && a.name === b.name;
-    case "not":
-      return b.kind === "not" && formulaEquals(a.body, b.body);
-    case "and":
-      return (
-        b.kind === "and" &&
-        formulaEquals(a.left, b.left) &&
-        formulaEquals(a.right, b.right)
-      );
-    case "or":
-      return (
-        b.kind === "or" &&
-        formulaEquals(a.left, b.left) &&
-        formulaEquals(a.right, b.right)
-      );
-    case "implies":
-      return (
-        b.kind === "implies" &&
-        formulaEquals(a.left, b.left) &&
-        formulaEquals(a.right, b.right)
-      );
-    case "iff":
-      return (
-        b.kind === "iff" &&
-        formulaEquals(a.left, b.left) &&
-        formulaEquals(a.right, b.right)
-      );
+function structuralEqual(a: Formula, b: Formula): boolean {
+  return formulaToString(a) === formulaToString(b);
+}
+
+export function formulasEqual(a: string, b: string): boolean {
+  try {
+    return structuralEqual(parseFormula(a), parseFormula(b));
+  } catch {
+    return a.trim() === b.trim();
   }
 }
 
 /**
- * Match a pattern against a target where every atom in the pattern is a
- * metavariable. Bindings must be uniform: the same metavariable can only be
- * bound to one subformula. Deterministic (single left-to-right pass).
+ * Attempts to bind every variable in `pattern` so the result equals `target`.
+ * Shared variables must map to structurally identical formulae.
  */
-function unify(
+function matchSubstitution(
   pattern: Formula,
   target: Formula,
   bindings: Map<string, Formula>,
 ): boolean {
-  if (pattern.kind === "atom") {
-    const existing = bindings.get(pattern.name);
-    if (existing) {
-      return formulaEquals(existing, target);
-    }
-    bindings.set(pattern.name, target);
-    return true;
-  }
-
   switch (pattern.kind) {
+    case "var": {
+      const existing = bindings.get(pattern.name);
+      if (existing) return structuralEqual(existing, target);
+      bindings.set(pattern.name, target);
+      return true;
+    }
+    case "const":
+      return target.kind === "const" && target.value === pattern.value;
     case "not":
-      return target.kind === "not" && unify(pattern.body, target.body, bindings);
-    case "and":
+      return target.kind === "not" && matchSubstitution(pattern.inner, target.inner, bindings);
+    case "bin":
       return (
-        target.kind === "and" &&
-        unify(pattern.left, target.left, bindings) &&
-        unify(pattern.right, target.right, bindings)
-      );
-    case "or":
-      return (
-        target.kind === "or" &&
-        unify(pattern.left, target.left, bindings) &&
-        unify(pattern.right, target.right, bindings)
-      );
-    case "implies":
-      return (
-        target.kind === "implies" &&
-        unify(pattern.left, target.left, bindings) &&
-        unify(pattern.right, target.right, bindings)
-      );
-    case "iff":
-      return (
-        target.kind === "iff" &&
-        unify(pattern.left, target.left, bindings) &&
-        unify(pattern.right, target.right, bindings)
+        target.kind === "bin" &&
+        pattern.op === target.op &&
+        matchSubstitution(pattern.left, target.left, bindings) &&
+        matchSubstitution(pattern.right, target.right, bindings)
       );
   }
 }
 
-function tryParse(input: string): Formula | null {
-  try {
-    return parseFormula(input);
-  } catch {
-    return null;
-  }
-}
+function checkModusPonens(step: Formula, context: Formula[]): ValidationResult {
+  for (const candidate of context) {
+    if (candidate.kind !== "bin" || candidate.op !== "implies") continue;
+    if (!structuralEqual(candidate.right, step)) continue;
 
-function validateModusPonens(
-  target: Formula,
-  context: readonly string[],
-): ValidationResult {
-  const parsed = context
-    .map(tryParse)
-    .filter((formula): formula is Formula => formula !== null);
-
-  for (let i = 0; i < parsed.length; i += 1) {
-    const candidate = parsed[i];
-    if (candidate.kind !== "implies") continue;
-    if (!formulaEquals(candidate.right, target)) continue;
-
-    for (let j = 0; j < parsed.length; j += 1) {
-      if (j === i) continue;
-      if (formulaEquals(parsed[j], candidate.left)) {
-        return { valid: true, inferredConclusion: formatFormula(target) };
-      }
+    const antecedentPresent = context.some((other) =>
+      structuralEqual(other, candidate.left),
+    );
+    if (antecedentPresent) {
+      return { valid: true, inferredConclusion: formulaToString(step) };
     }
   }
 
   return {
     valid: false,
     reason:
-      "No implication in context has an antecedent present and a consequent matching this step.",
+      "Modus Ponens needs an implication A → B and its antecedent A in the context to derive B.",
   };
 }
 
-function validateSubstitution(
-  target: Formula,
-  context: readonly string[],
-): ValidationResult {
-  for (const source of context) {
-    const parsed = tryParse(source);
-    if (parsed === null) continue;
-
+function checkSubstitution(step: Formula, context: Formula[]): ValidationResult {
+  for (const candidate of context) {
     const bindings = new Map<string, Formula>();
-    if (unify(parsed, target, bindings)) {
-      return { valid: true, inferredConclusion: formatFormula(target) };
+    if (!matchSubstitution(candidate, step, bindings)) continue;
+
+    const nonIdentity = [...bindings.entries()].some(
+      ([name, value]) => !(value.kind === "var" && value.name === name),
+    );
+    if (nonIdentity) {
+      return { valid: true, inferredConclusion: formulaToString(step) };
     }
   }
 
   return {
     valid: false,
     reason:
-      "No context formula can be transformed into this step by uniform substitution.",
+      "No context formula yields this step by a uniform, non-identity substitution.",
   };
 }
 
-function validateAxiom(
-  target: Formula,
-  axioms: readonly Axiom[],
+function checkAxiom(
+  step: Formula,
+  justification: string,
+  axioms: Axiom[],
 ): ValidationResult {
-  for (const axiom of axioms) {
-    const schema = tryParse(axiom.schema);
-    if (schema === null) continue;
+  const named = axioms.filter(
+    (axiom) => axiom.id === justification || axiom.name === justification,
+  );
+  const pool = named.length > 0 ? named : axioms;
 
+  for (const axiom of pool) {
+    let schema: Formula;
+    try {
+      schema = parseFormula(axiom.schema);
+    } catch {
+      continue;
+    }
     const bindings = new Map<string, Formula>();
-    if (unify(schema, target, bindings)) {
-      return { valid: true, inferredConclusion: formatFormula(target) };
+    if (matchSubstitution(schema, step, bindings)) {
+      return {
+        valid: true,
+        inferredConclusion: formulaToString(step),
+      };
     }
   }
 
   return {
     valid: false,
-    reason: "This step is not an instance of any available axiom schema.",
+    reason: justification
+      ? `Step does not match the schema of axiom '${justification}'.`
+      : "Step does not match any known axiom schema.",
   };
+}
+
+function parseContext(context: string[]): Formula[] {
+  const parsed: Formula[] = [];
+  for (const raw of context) {
+    try {
+      parsed.push(parseFormula(raw));
+    } catch {
+      // Ignore context lines that are not well-formed.
+    }
+  }
+  return parsed;
 }
 
 /**
- * Validate a single proof step against the formulas proven so far (`context`)
- * and the available axioms. Pure and deterministic: identical inputs always
- * produce identical output.
+ * Deterministic, client-side proof step validation. Supports Modus Ponens,
+ * uniform substitution, and axiom application. Identical inputs always yield
+ * identical results.
  */
 export function validateStep(
   step: ProofStep,
-  context: readonly string[],
-  axioms: readonly Axiom[],
+  context: string[],
+  axioms: Axiom[],
 ): ValidationResult {
-  let target: Formula;
+  let stepFormula: Formula;
   try {
-    target = parseFormula(step.formula);
+    stepFormula = parseFormula(step.formula);
   } catch (error) {
-    const detail =
-      error instanceof Error ? error.message : "Unknown syntax error";
-    return { valid: false, reason: `Invalid formula: ${detail}` };
+    return {
+      valid: false,
+      reason: `Invalid formula: ${(error as Error).message}`,
+    };
   }
+
+  if (step.formula.trim().length === 0) {
+    return { valid: false, reason: "Empty formula." };
+  }
+
+  const parsedContext = parseContext(context);
 
   switch (step.rule) {
     case "ModusPonens":
-      return validateModusPonens(target, context);
+      return checkModusPonens(stepFormula, parsedContext);
     case "Substitution":
-      return validateSubstitution(target, context);
+      return checkSubstitution(stepFormula, parsedContext);
     case "Axiom":
-      return validateAxiom(target, axioms);
+      return checkAxiom(stepFormula, step.justification, axioms);
     default:
-      return {
-        valid: false,
-        reason: `Unknown rule: ${String(step.rule)}`,
-      };
+      return { valid: false, reason: "Unknown inference rule." };
   }
 }

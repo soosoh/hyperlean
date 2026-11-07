@@ -1,11 +1,11 @@
 export type NodeStatus = "Locked" | "Available" | "Completed";
 
-export type TheoremStat = {
+export interface TheoremStat {
   solveCount: number;
   avgTimeSeconds: number;
-};
+}
 
-export type Theorem = {
+export interface Theorem {
   id: string;
   title: string;
   category: string;
@@ -17,6 +17,6 @@ export type Theorem = {
   solved?: boolean;
   firstProvedBy?: string;
   stats: TheoremStat;
-};
+}
 
 export type TheoremNode = Theorem & { status: NodeStatus };
